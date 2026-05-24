@@ -1,11 +1,13 @@
 # Python backend for 404
 
-Backend runs without external packages: only Python standard library and SQLite.
+Backend stores data in MongoDB.
 
 ## Start
 
 ```powershell
-py backend/server.py
+cd backend
+python -m pip install -r requirements.txt
+python server.py
 ```
 
 API will be available at:
@@ -21,7 +23,18 @@ email: admin@404.local
 password: admin404
 ```
 
-The SQLite database is created automatically at `backend/data/app.db`.
+MongoDB database is created automatically. Defaults:
+
+```text
+MONGO_URI=mongodb://localhost:27017
+MONGO_DB=diplom_404
+```
+
+To migrate old SQLite data from `backend/data/app.db`:
+
+```powershell
+python migrate_sqlite_to_mongo.py
+```
 
 ## Structure
 
@@ -29,7 +42,7 @@ The SQLite database is created automatically at `backend/data/app.db`.
 server.py    - starts the HTTP server
 handler.py   - API routes and request handling
 services.py  - business logic for auth, events, orders and admin actions
-database.py  - SQLite connection, tables and seed data
+database.py  - MongoDB connection, indexes and seed data
 schemas.py   - converts database rows to frontend JSON
 auth.py      - passwords and token logic
 config.py    - ports, paths and environment variables
@@ -42,6 +55,7 @@ Useful environment variables:
 ```powershell
 $env:BACKEND_PORT="8000"
 $env:BACKEND_SECRET="replace-this-secret"
-$env:BACKEND_DB="backend/data/app.db"
-py backend/server.py
+$env:MONGO_URI="mongodb://localhost:27017"
+$env:MONGO_DB="diplom_404"
+python backend/server.py
 ```

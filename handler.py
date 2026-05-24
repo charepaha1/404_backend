@@ -6,20 +6,21 @@ from typing import Any
 from urllib.parse import urlparse
 
 import services
+from config import BOT_TOKEN
 from database import db
 from errors import ApiError
 from schemas import user_dto
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Python404Backend/1.0"
+    server_version = "Python404Backend/1.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"{self.address_string()} - {fmt % args}")
 
     def end_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Bot-Token")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
         super().end_headers()
 
@@ -38,6 +39,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PATCH(self) -> None:
         self.handle_request("PATCH")
+
+    def do_DELETE(self) -> None:
+        self.handle_request("DELETE")
 
     def handle_request(self, method: str) -> None:
         try:
@@ -69,11 +73,26 @@ class Handler(BaseHTTPRequestHandler):
         auth = self.headers.get("Authorization", "")
         return auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else None
 
+    def bot_authorized(self) -> bool:
+        token = (
+            self.headers.get("X-Bot-Token")
+            or self.headers.get("X-BOT-TOKEN")
+            or self.headers.get("x-bot-token")
+            or ""
+        )
+        return bool(BOT_TOKEN and (token.strip() == BOT_TOKEN or BOT_TOKEN in str(self.headers)))
+
     def route(self, method: str) -> Any:
         route = self.api_route()
         with db() as conn:
             if method == "GET" and route == ["events"]:
                 return services.public_events(conn)
+
+            if method == "GET" and len(route) == 2 and route[0] == "events":
+                return services.get_event(conn, int(route[1]))
+
+            if method == "GET" and len(route) == 2 and route[0] == "tickets":
+                return services.get_ticket(conn, route[1])
 
             if method == "POST" and route == ["orders"]:
                 user = services.user_from_token(conn, self.token(), required=False)
@@ -102,7 +121,8 @@ class Handler(BaseHTTPRequestHandler):
         raise ApiError(404, "Not found")
 
     def admin_route(self, conn: Any, method: str, route: list[str]) -> Any:
-        services.user_from_token(conn, self.token(), admin=True)
+        if not self.bot_authorized():
+            services.user_from_token(conn, self.token(), admin=True)
 
         if method == "GET" and route == ["events"]:
             return services.admin_events(conn)
@@ -113,8 +133,20 @@ class Handler(BaseHTTPRequestHandler):
         if method == "PUT" and len(route) == 2 and route[0] == "events":
             return services.update_event(conn, int(route[1]), self.read_json())
 
+        if method == "DELETE" and len(route) == 2 and route[0] == "events":
+            return services.delete_event(conn, int(route[1]))
+
+        if method == "PATCH" and len(route) == 3 and route[0] == "events" and route[2] == "poster":
+            return services.update_event_poster(conn, int(route[1]), self.read_json().get("posterUrl"))
+
         if method == "GET" and route == ["orders"]:
             return services.admin_orders(conn)
+
+        if method == "POST" and route == ["manual-tickets"]:
+            return services.create_manual_tickets(conn, self.read_json())
+
+        if method == "POST" and route == ["pass-ticket"]:
+            return services.create_manual_tickets(conn, self.read_json(), pass_ticket=True)
 
         if method == "PATCH" and len(route) == 3 and route[0] == "orders" and route[2] in {"confirm", "cancel"}:
             status = "CONFIRMED" if route[2] == "confirm" else "CANCELLED"
@@ -122,6 +154,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if method == "POST" and len(route) == 3 and route[0] == "tickets" and route[2] == "check-in":
             return services.check_in(conn, route[1])
+
+        if method == "DELETE" and len(route) == 2 and route[0] == "tickets":
+            return services.delete_ticket(conn, route[1])
+
+        if method == "DELETE" and route == ["tickets"]:
+            return services.clear_tickets(conn)
 
         raise ApiError(404, "Not found")
 
