@@ -8,6 +8,7 @@ from auth import hash_password, read_token, sign_token, verify_password
 from database import next_id
 from errors import ApiError
 from schemas import event_dto, order_dto, ticket_dto, user_dto
+from telegram_notify import notify_payment_claim
 from utils import make_code, now_iso
 
 
@@ -142,7 +143,10 @@ def mark_paid(conn: Any, order_code: str, payload: dict[str, Any]) -> dict[str, 
         {"$set": {"status": "PENDING_CONFIRMATION", "payment_comment": payload.get("comment") or ""}},
     )
     conn.tickets.update_many({"order_id": order["id"]}, {"$set": {"status": "PENDING_CONFIRMATION"}})
-    return order_dto(conn, conn.orders.find_one({"id": order["id"]}))
+    updated_order = conn.orders.find_one({"id": order["id"]})
+    if payload.get("notifyAdmins", True):
+        notify_payment_claim(conn, updated_order)
+    return order_dto(conn, updated_order)
 
 
 def login(conn: Any, payload: dict[str, Any]) -> dict[str, Any]:

@@ -33,6 +33,13 @@ def db() -> MongoContext:
 
 
 def next_id(conn: Database, name: str) -> int:
+    max_row = conn[name].find_one(sort=[("id", DESCENDING)])
+    max_id = int((max_row or {}).get("id") or 0)
+    conn.counters.update_one(
+        {"_id": name},
+        {"$max": {"seq": max_id}},
+        upsert=True,
+    )
     counter = conn.counters.find_one_and_update(
         {"_id": name},
         {"$inc": {"seq": 1}},
