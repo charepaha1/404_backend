@@ -49,6 +49,7 @@ def _unique_code(conn: Any, collection: str, field: str, prefix: str) -> str:
 
 
 def create_order(conn: Any, payload: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
+    # Public purchase flow: validate event/customer data, then create one order and its tickets.
     event = conn.events.find_one({"id": int(payload.get("eventId") or 0)})
     if not event:
         raise ApiError(404, "Event not found")
@@ -96,6 +97,7 @@ def _insert_order(
     payment_comment: str | None = None,
     ticket_code: str | None = None,
 ) -> dict[str, Any]:
+    # Shared order creation helper used by normal purchases and manual/admin tickets.
     created_at = now_iso()
     order = {
         "id": next_id(conn, "orders"),
@@ -132,6 +134,7 @@ def _insert_order(
 
 
 def mark_paid(conn: Any, order_code: str, payload: dict[str, Any]) -> dict[str, Any]:
+    # Customer says payment was sent; admin still has to confirm it later.
     order = conn.orders.find_one({"order_code": order_code})
     if not order:
         raise ApiError(404, "Order not found")
@@ -265,6 +268,7 @@ def update_event_poster(conn: Any, event_id: int, poster_url: str | None) -> dic
 
 
 def set_order_status(conn: Any, order_code: str, status: str) -> dict[str, Any]:
+    # Admin status change keeps order and all related tickets synchronized.
     order = conn.orders.find_one({"order_code": order_code})
     if not order:
         raise ApiError(404, "Order not found")
@@ -284,6 +288,7 @@ def get_ticket(conn: Any, ticket_code: str) -> dict[str, Any]:
 
 
 def check_in(conn: Any, ticket_code: str) -> dict[str, Any]:
+    # Entrance control: only confirmed, not-yet-used tickets can be checked in.
     ticket = conn.tickets.find_one({"ticket_code": ticket_code.strip().lstrip("#").upper()})
     if not ticket:
         raise ApiError(404, "Ticket not found")

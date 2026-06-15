@@ -50,6 +50,7 @@ def next_id(conn: Database, name: str) -> int:
 
 
 def init_db() -> None:
+    # Prepare MongoDB for a fresh run: indexes, default admin and a demo event.
     conn = mongo()
 
     conn.users.create_index([("id", ASCENDING)], unique=True)

@@ -1,15 +1,28 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+import uuid
 from http.server import BaseHTTPRequestHandler
+from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import services
-from config import BOT_TOKEN
+from config import BOT_TOKEN, ROOT
 from database import db
 from errors import ApiError
 from schemas import user_dto
+
+UPLOAD_ROOT = ROOT / "uploads"
+POSTER_ROOT = UPLOAD_ROOT / "posters"
+MAX_POSTER_BYTES = 8 * 1024 * 1024
+POSTER_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -45,6 +58,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_request(self, method: str) -> None:
         try:
+            if method == "GET" and self.send_static_upload():
+                return
             self.send_json(self.route(method))
         except ApiError as exc:
             self.send_json({"error": exc.message}, exc.status)
@@ -59,6 +74,26 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def send_static_upload(self) -> bool:
+        parsed = urlparse(self.path)
+        if not parsed.path.startswith("/uploads/"):
+            return False
+
+        relative = unquote(parsed.path.removeprefix("/uploads/")).replace("\\", "/")
+        target = (UPLOAD_ROOT / relative).resolve()
+        upload_root = UPLOAD_ROOT.resolve()
+        if not str(target).startswith(str(upload_root)) or not target.is_file():
+            raise ApiError(404, "File not found")
+
+        body = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mimetypes.guess_type(target.name)[0] or "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=31536000")
+        self.end_headers()
+        self.wfile.write(body)
+        return True
 
     def read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -83,6 +118,7 @@ class Handler(BaseHTTPRequestHandler):
         return bool(BOT_TOKEN and (token.strip() == BOT_TOKEN or BOT_TOKEN in str(self.headers)))
 
     def route(self, method: str) -> Any:
+        # Main API router: maps an HTTP method + /api/... path to business logic.
         route = self.api_route()
         with db() as conn:
             if method == "GET" and route == ["events"]:
@@ -121,6 +157,7 @@ class Handler(BaseHTTPRequestHandler):
         raise ApiError(404, "Not found")
 
     def admin_route(self, conn: Any, method: str, route: list[str]) -> Any:
+        # Admin endpoints are protected either by an ADMIN user token or by the bot token.
         if not self.bot_authorized():
             services.user_from_token(conn, self.token(), admin=True)
 
@@ -138,6 +175,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if method == "PATCH" and len(route) == 3 and route[0] == "events" and route[2] == "poster":
             return services.update_event_poster(conn, int(route[1]), self.read_json().get("posterUrl"))
+
+        if method == "POST" and route == ["uploads", "poster"]:
+            return self.save_poster_upload()
 
         if method == "GET" and route == ["orders"]:
             return services.admin_orders(conn)
@@ -162,6 +202,26 @@ class Handler(BaseHTTPRequestHandler):
             return services.clear_tickets(conn)
 
         raise ApiError(404, "Not found")
+
+    def save_poster_upload(self) -> dict[str, str]:
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type not in POSTER_TYPES:
+            raise ApiError(400, "Only JPEG, PNG, WEBP and GIF images are allowed")
+
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length <= 0:
+            raise ApiError(400, "Poster file is required")
+        if length > MAX_POSTER_BYTES:
+            raise ApiError(400, "Poster file is too large")
+
+        POSTER_ROOT.mkdir(parents=True, exist_ok=True)
+        filename = f"{uuid.uuid4().hex}{POSTER_TYPES[content_type]}"
+        target = POSTER_ROOT / filename
+        target.write_bytes(self.rfile.read(length))
+
+        path = f"/uploads/posters/{filename}"
+        host = self.headers.get("Host") or f"localhost:{self.server.server_port}"
+        return {"posterUrl": f"http://{host}{path}"}
 
     def api_route(self) -> list[str]:
         parsed = urlparse(self.path)

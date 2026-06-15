@@ -12,6 +12,7 @@ from config import SECRET, TOKEN_TTL_SECONDS
 
 
 def hash_password(password: str) -> str:
+    # Store a salted PBKDF2 hash instead of the raw password.
     salt = secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("ascii"), 120_000)
     return f"{salt}:{digest.hex()}"
@@ -31,6 +32,7 @@ def b64url(data: bytes) -> str:
 
 
 def sign_token(user_id: int) -> str:
+    # Lightweight signed auth token: payload + HMAC signature.
     payload = {"sub": user_id, "exp": int(time.time()) + TOKEN_TTL_SECONDS}
     payload_raw = b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     signature = hmac.new(SECRET.encode("utf-8"), payload_raw.encode("ascii"), hashlib.sha256).digest()
