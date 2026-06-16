@@ -8,6 +8,7 @@ from auth import hash_password, read_token, sign_token, verify_password
 from database import next_id
 from errors import ApiError
 from schemas import event_dto, order_dto, ticket_dto, user_dto
+from table_sync import mark_ticket_checked_in, save_confirmed_order
 from telegram_notify import notify_payment_claim
 from utils import make_code, now_iso
 
@@ -275,7 +276,10 @@ def set_order_status(conn: Any, order_code: str, status: str) -> dict[str, Any]:
 
     conn.orders.update_one({"id": order["id"]}, {"$set": {"status": status}})
     conn.tickets.update_many({"order_id": order["id"]}, {"$set": {"status": status}})
-    return order_dto(conn, conn.orders.find_one({"id": order["id"]}))
+    updated_order = conn.orders.find_one({"id": order["id"]})
+    if status == "CONFIRMED":
+        save_confirmed_order(conn, updated_order)
+    return order_dto(conn, updated_order)
 
 
 def get_ticket(conn: Any, ticket_code: str) -> dict[str, Any]:
@@ -299,6 +303,7 @@ def check_in(conn: Any, ticket_code: str) -> dict[str, Any]:
         {"id": ticket["id"]},
         {"$set": {"status": "CHECKED_IN", "checked_in_at": now_iso()}},
     )
+    mark_ticket_checked_in(ticket["ticket_code"])
     ticket = conn.tickets.find_one({"id": ticket["id"]})
     order = conn.orders.find_one({"id": ticket["order_id"]})
     event = conn.events.find_one({"id": order["event_id"]})
